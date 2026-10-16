@@ -1,89 +1,89 @@
 # ESXi MCP Server
 
-Servidor MCP para administrar VMware ESXi o vCenter mediante `pyVmomi`. Incluye transporte SSE nativo y un gateway que lo adapta a **Streamable HTTP**, para integrarlo con clientes MCP actuales como APX.
+An MCP server for administering VMware ESXi or vCenter through `pyVmomi`. It includes native SSE transport and a gateway that adapts it to **Streamable HTTP**, enabling integration with current MCP clients such as APX.
 
-> **Estado:** la conectividad, inicialización MCP y descubrimiento de herramientas fueron verificados. Las operaciones administrativas reales contra ESXi (`tools/call`) requieren una prueba explícitamente autorizada en una VM no crítica.
+> **Status:** connectivity, MCP initialization, and tool discovery have been verified. Real administrative operations against ESXi (`tools/call`) still require an explicitly authorized test on a non-critical VM.
 
-## Arquitectura
+## Architecture
 
 ```text
-Cliente MCP (APX)
+MCP client (APX)
   └─ POST /mcp :8009       Streamable HTTP
        └─ Supergateway
-            └─ GET /sse :8080 y POST /sse/messages  SSE
+            └─ GET /sse :8080 and POST /sse/messages  SSE
                  └─ ESXi MCP Server (Python/Uvicorn/pyVmomi)
                       └─ VMware SOAP HTTPS :443
-                           └─ ESXi o vCenter
+                           └─ ESXi or vCenter
 ```
 
-| Componente | Endpoint / función |
+| Component | Endpoint / purpose |
 |---|---|
-| Cliente Streamable HTTP | `http://<host>:8009/mcp` |
-| SSE legado | `http://<host>:8008/sse` |
-| Mensajes SSE | `/sse/messages?session_id=<id>` |
-| Hipervisor | `https://<esxi-o-vcenter>` |
+| Streamable HTTP client | `http://<host>:8009/mcp` |
+| Legacy SSE | `http://<host>:8008/sse` |
+| SSE messages | `/sse/messages?session_id=<id>` |
+| Hypervisor | `https://<esxi-or-vcenter>` |
 
-## Correcciones e implementación realizadas
+## Implemented fixes and improvements
 
-- Se añadió **Supergateway** en Docker Compose para traducir el SSE nativo a Streamable HTTP en `/mcp` (puerto `8009`). Esto resuelve el `Not Found` de clientes que envían `POST /mcp`.
-- Se corrigió el flujo SSE: `connect_sse()` gestiona ahora la respuesta ASGI sin un `http.response.start` manual. El endpoint entrega correctamente el evento con la URL de mensajes y el `session_id` por conexión.
-- Se sustituyó la llamada inexistente `handle_post()` por `handle_post_message(scope, receive, send)`, compatible con el SDK MCP instalado.
-- Se registraron los handlers MCP de `tools/list` y `tools/call` mediante `add_request_handler`, en vez de decoradores no soportados por la versión instalada.
-- Se corrigieron permisos del bind mount `./logs` para que el usuario no privilegiado del contenedor pueda escribir el log.
-- Se incorporaron healthcheck, límites de recursos, red bridge dedicada y `no-new-privileges` para ambos servicios de Compose.
-- La configuración real, secretos, logs y copias de respaldo están excluidos de Git. Use `config.yaml.sample` como plantilla.
+- Added **Supergateway** to Docker Compose to translate native SSE into Streamable HTTP at `/mcp` (port `8009`). This fixes the `Not Found` response from clients that send `POST /mcp`.
+- Fixed the SSE flow: `connect_sse()` now manages the ASGI response without a manual `http.response.start`. The endpoint correctly returns the event containing the message URL and a per-connection `session_id`.
+- Replaced the nonexistent `handle_post()` call with `handle_post_message(scope, receive, send)`, which is compatible with the installed MCP SDK.
+- Registered the MCP `tools/list` and `tools/call` handlers with `add_request_handler`, replacing decorators unsupported by the installed version.
+- Fixed permissions for the `./logs` bind mount so the non-privileged container user can write logs.
+- Added a health check, resource limits, a dedicated bridge network, and `no-new-privileges` to both Compose services.
+- Real configuration, secrets, logs, and backups are excluded from Git. Use `config.yaml.sample` as the starting point.
 
-## Herramientas MCP disponibles
+## Available MCP tools
 
-El descubrimiento `tools/list` devuelve estas ocho herramientas:
+The `tools/list` discovery response contains the following eight tools:
 
-| Herramienta | Uso |
+| Tool | Purpose |
 |---|---|
-| `authenticate` | Autenticación MCP si se configuró una API key |
-| `listVMs` | Enumerar máquinas virtuales |
-| `powerOn` | Encender una VM |
-| `powerOff` | Apagado forzado de una VM |
-| `createVM` | Crear una VM |
-| `cloneVM` | Clonar una VM |
-| `deleteVM` | Eliminar permanentemente una VM |
-| `vmStats` | Consultar estadísticas de rendimiento |
+| `authenticate` | MCP authentication when an API key is configured |
+| `listVMs` | List virtual machines |
+| `powerOn` | Power on a VM |
+| `powerOff` | Force power off a VM |
+| `createVM` | Create a VM |
+| `cloneVM` | Clone a VM |
+| `deleteVM` | Permanently delete a VM |
+| `vmStats` | Retrieve performance statistics |
 
-El registro de una herramienta y su aparición en `tools/list` **no demuestra** que su ejecución contra ESXi esté validada. En particular, `powerOff` es un apagado forzado.
+Registering a tool and seeing it in `tools/list` **does not prove** that execution against ESXi has been validated. In particular, `powerOff` is a forced shutdown.
 
-## Requisitos
+## Requirements
 
-- Docker Engine y Docker Compose v2 (recomendado), o Python 3.7+ para ejecución local.
-- Acceso de red HTTPS al ESXi/vCenter.
-- Cuenta de VMware con los permisos mínimos necesarios.
+- Docker Engine and Docker Compose v2 (recommended), or Python 3.7+ for local execution.
+- HTTPS network access to ESXi/vCenter.
+- A VMware account with the minimum required privileges.
 
-Dependencias Python: `pyvmomi`, `pyyaml`, `uvicorn` y `mcp`.
+Python dependencies: `pyvmomi`, `pyyaml`, `uvicorn`, and `mcp`.
 
-## Despliegue con Docker Compose
+## Deployment with Docker Compose
 
-1. Cree una configuración local a partir de la plantilla:
+1. Create a local configuration from the sample:
 
 ```bash
 cp config.yaml.sample config.yaml
 mkdir -p logs
 ```
 
-2. Edite `config.yaml` y/o defina las variables necesarias, sin añadir credenciales al repositorio:
+2. Edit `config.yaml` and/or set the required environment variables. Do not add credentials to the repository:
 
 ```yaml
-vcenter_host: "<esxi-o-vcenter>"
-vcenter_user: "<usuario>"
-vcenter_password: "<contraseña>"
-datacenter: ""                 # Opcional; vacío para ESXi standalone
-cluster: ""                    # Opcional; vacío para ESXi standalone
+vcenter_host: "<esxi-or-vcenter>"
+vcenter_user: "<username>"
+vcenter_password: "<password>"
+datacenter: ""                 # Optional; empty for standalone ESXi
+cluster: ""                    # Optional; empty for standalone ESXi
 datastore: "<datastore>"
 network: "VM Network"
-insecure: false                 # Use true solo si comprende el riesgo
-api_key: "<api-key-opcional>"
+insecure: false                 # Set true only if you understand the risk
+api_key: "<optional-api-key>"
 log_file: "./logs/vmware_mcp.log"
 log_level: "INFO"
 ```
 
-3. Ajuste los permisos del directorio de logs al UID/GID del contenedor y levante los servicios:
+3. Set the log directory ownership to the container UID/GID, then start the services:
 
 ```bash
 MCP_UID=$(docker compose run --rm --no-deps --entrypoint id esxi-mcp-server -u)
@@ -94,17 +94,17 @@ sudo chmod -R u+rwX ./logs
 docker compose up -d --build
 ```
 
-4. Configure el cliente MCP con la URL Streamable HTTP:
+4. Configure the MCP client with the Streamable HTTP URL:
 
 ```text
-http://<host-docker>:8009/mcp
+http://<docker-host>:8009/mcp
 ```
 
-El endpoint SSE directo (`http://<host-docker>:8008/sse`) queda disponible para clientes que aún utilizan el transporte SSE legado.
+The direct SSE endpoint (`http://<docker-host>:8008/sse`) remains available for clients that still use the legacy SSE transport.
 
-## Validación y diagnóstico
+## Validation and troubleshooting
 
-Después de modificar `server.py`:
+After changing `server.py`:
 
 ```bash
 python3 -m py_compile server.py
@@ -112,7 +112,7 @@ docker compose up -d --build --force-recreate esxi-mcp-server
 docker compose restart esxi-mcp-gateway
 ```
 
-Comandos operativos:
+Operational commands:
 
 ```bash
 docker compose ps
@@ -120,26 +120,26 @@ docker compose logs --tail=100 esxi-mcp-server
 docker compose logs --tail=100 esxi-mcp-gateway
 ```
 
-Validaciones realizadas durante la corrección:
+The following checks were completed during the fixes:
 
-- `GET /sse` devuelve el evento `endpoint` con `/sse/messages?session_id=...`.
-- Supergateway traduce la inicialización desde `/mcp` hacia SSE.
-- `initialize` y `tools/list` responden exitosamente por JSON-RPC.
-- `tools/list` descubre las ocho herramientas descritas arriba.
+- `GET /sse` returns the `endpoint` event with `/sse/messages?session_id=...`.
+- Supergateway translates initialization traffic from `/mcp` to SSE.
+- `initialize` and `tools/list` return successful JSON-RPC responses.
+- `tools/list` discovers the eight tools listed above.
 
-## Seguridad y operación
+## Security and operations
 
-- No versionar `config.yaml`, `.env`, logs, tokens ni contraseñas.
-- Prefiera TLS válido (`insecure: false`), API key, segmentación de red y un firewall que exponga el servicio solo a clientes autorizados.
-- Fije versiones de las dependencias MCP y de Supergateway antes de usarlo en producción.
-- Aplique permisos mínimos en ESXi/vCenter. El control de autenticación, autorización y privilegios efectivos permanece en VMware.
-- Antes de habilitar administración operativa, revise los logs del gateway durante un `tools/call` autorizado y pruebe con una VM no crítica.
+- Do not commit `config.yaml`, `.env` files, logs, tokens, or passwords.
+- Prefer valid TLS (`insecure: false`), API key authentication, network segmentation, and a firewall that exposes the service only to authorized clients.
+- Pin MCP SDK and Supergateway versions before production use.
+- Apply least privilege in ESXi/vCenter. VMware remains responsible for authentication, authorization, and effective hypervisor privileges.
+- Before enabling operational administration, inspect gateway logs during an authorized `tools/call` and test with a non-critical VM.
 
-## Licencia
+## License
 
 MIT License.
 
-## Créditos
+## Credits
 
 - VMware pyVmomi
 - MCP Protocol
