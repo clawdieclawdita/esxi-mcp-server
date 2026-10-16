@@ -1,0 +1,105 @@
+
+services:
+
+  # ==============================================
+  # VMware ESXi MCP Server (SSE)
+  # ==============================================
+  esxi-mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: esxi-mcp-server
+    restart: unless-stopped
+
+    ports:
+      - "8008:8080"
+
+    volumes:
+      - ./config.yaml:/app/config/config.yaml:ro
+      - ./logs:/app/logs
+
+    environment:
+      VCENTER_HOST: ${VCENTER_HOST:-}
+      VCENTER_USER: ${VCENTER_USER:-}
+      VCENTER_PASSWORD: ${VCENTER_PASSWORD}
+      VCENTER_DATACENTER: ${VCENTER_DATACENTER:-}
+      VCENTER_CLUSTER: ${VCENTER_CLUSTER:-}
+      VCENTER_DATASTORE: ${VCENTER_DATASTORE:-}
+      VCENTER_NETWORK: ${VCENTER_NETWORK:-VM Network}
+      VCENTER_INSECURE: ${VCENTER_INSECURE:-true}
+      MCP_API_KEY: ${MCP_API_KEY:-}
+      MCP_LOG_LEVEL: ${MCP_LOG_LEVEL:-INFO}
+
+    networks:
+      - esxi-mcp-network
+
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket; s=socket.create_connection(('127.0.0.1',8080),3); s.close()"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+    security_opt:
+      - no-new-privileges:true
+
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+  # ==============================================
+  # Supergateway (SSE -> Streamable HTTP)
+  # ==============================================
+  esxi-mcp-gateway:
+    image: node:22-alpine
+
+    container_name: esxi-mcp-gateway
+    restart: unless-stopped
+
+    ports:
+      - "8009:8009"
+
+    working_dir: /app
+
+    command:
+      - sh
+      - -c
+      - |
+        exec npx -y supergateway \
+          --sse http://esxi-mcp-server:8080/sse \
+          --outputTransport streamableHttp \
+          --port 8009 \
+          --host 0.0.0.0 \
+          --streamableHttpPath /mcp \
+          --stateful \
+          --logLevel info
+
+    depends_on:
+      esxi-mcp-server:
+        condition: service_healthy
+
+    networks:
+      - esxi-mcp-network
+
+    security_opt:
+      - no-new-privileges:true
+
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+# ==============================================
+# Docker Networks
+# ==============================================
+networks:
+  esxi-mcp-network:
+    driver: bridge
